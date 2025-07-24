@@ -1,3 +1,4 @@
+
 // A debouncer function to limit the rate at which a function gets called.
 function debounce(func, wait) {
     let timeout;
@@ -107,37 +108,46 @@ document.addEventListener('DOMContentLoaded', () => {
         async _getAIResponse(payload) {
             this.state.aiIsLoading = true;
             this.showLoadingModal();
-
+        
             try {
                 const response = await fetch('/api/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
                 });
-
+        
+                // Read the response body once, regardless of status, as text
+                const responseText = await response.text();
+        
                 if (!response.ok) {
-                    let errorMsg = `AI server error (status: ${response.status}).`;
+                    let errorMsg;
                     try {
-                        // Most specific error from our API function
-                        const errorData = await response.json();
-                        errorMsg = errorData.error || JSON.stringify(errorData);
-                    } catch (jsonError) {
-                        // Fallback for non-JSON responses (like Vercel's HTML error pages)
-                        const textError = await response.text();
-                        console.error("Non-JSON error response from server:", textError);
-                        errorMsg = "The server returned an unexpected response. This can happen during deployment. Check the server logs.";
+                        // Try to parse the text as JSON for a structured error message
+                        const errorData = JSON.parse(responseText);
+                        errorMsg = errorData.error || responseText;
+                    } catch (e) {
+                        // If it's not JSON, use the raw text (e.g., Vercel's HTML error page)
+                        console.error("Non-JSON error response from server:", responseText);
+                        if (responseText.toLowerCase().includes('<html')) {
+                             errorMsg = "The server returned an unexpected response. This can happen during deployment. Check the server logs for details.";
+                        } else {
+                            errorMsg = responseText || `AI server error (status: ${response.status})`;
+                        }
                     }
                     throw new Error(errorMsg);
                 }
-
-                const data = await response.json();
+                
+                // On success, parse the response text
+                const data = JSON.parse(responseText);
                 return data.text;
+                
             } catch (error) {
                 console.error("Error calling AI proxy:", error);
+                // Return a user-friendly error message, using the message from the thrown Error
                 return `Sorry, an error occurred while contacting the AI: ${error.message}`;
             } finally {
                 this.state.aiIsLoading = false;
-                // The modal will be replaced by the result/error message, so no need to close it here.
+                // The modal will be replaced by the result/error message.
             }
         },
         
@@ -463,9 +473,61 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         },
 
-        initPomodoro() { /* ... */ },
-        togglePomodoro() { /* ... */ },
-        resetPomodoro() { /* ... */ },
+        initPomodoro() {
+            this.updatePomodoroDisplay();
+        },
+        togglePomodoro() {
+            this.state.pomodoro.isRunning = !this.state.pomodoro.isRunning;
+            if (this.state.pomodoro.isRunning) {
+                this.startPomodoroInterval();
+                this.dom.pomodoroControls.querySelector('[data-action="pomodoro-start-pause"] i').className = 'fas fa-pause';
+            } else {
+                clearInterval(this.pomodoroInterval);
+                this.dom.pomodoroControls.querySelector('[data-action="pomodoro-start-pause"] i').className = 'fas fa-play';
+            }
+        },
+        resetPomodoro() {
+            clearInterval(this.pomodoroInterval);
+            this.state.pomodoro.isRunning = false;
+            this.state.pomodoro.isWorkSession = true;
+            this.state.pomodoro.timeRemaining = this.state.pomodoro.workDuration;
+            this.updatePomodoroDisplay();
+            this.dom.pomodoroControls.querySelector('[data-action="pomodoro-start-pause"] i').className = 'fas fa-play';
+        },
+        startPomodoroInterval() {
+            this.pomodoroInterval = setInterval(() => {
+                this.state.pomodoro.timeRemaining--;
+                this.updatePomodoroDisplay();
+                if (this.state.pomodoro.timeRemaining < 0) {
+                    clearInterval(this.pomodoroInterval);
+                    this.switchPomodoroSession();
+                }
+            }, 1000);
+        },
+        switchPomodoroSession() {
+            this.state.pomodoro.isWorkSession = !this.state.pomodoro.isWorkSession;
+            this.state.pomodoro.timeRemaining = this.state.pomodoro.isWorkSession 
+                ? this.state.pomodoro.workDuration 
+                : this.state.pomodoro.breakDuration;
+            this.updatePomodoroDisplay();
+            this.startPomodoroInterval(); // Auto-start next session
+        },
+        updatePomodoroDisplay() {
+            const { timeRemaining, isWorkSession } = this.state.pomodoro;
+            const duration = isWorkSession ? this.state.pomodoro.workDuration : this.state.pomodoro.breakDuration;
+            const minutes = Math.floor(timeRemaining / 60);
+            const seconds = timeRemaining % 60;
+            this.dom.pomodoroTime.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+            const radius = this.dom.pomodoroProgress.r.baseVal.value;
+            const circumference = 2 * Math.PI * radius;
+            const offset = circumference - (timeRemaining / duration) * circumference;
+            this.dom.pomodoroProgress.style.strokeDasharray = circumference;
+            this.dom.pomodoroProgress.style.strokeDashoffset = isNaN(offset) ? circumference : offset;
+
+            this.dom.pomodoroStatus.textContent = isWorkSession ? 'Work Session' : 'Break Session';
+            this.dom.pomodoroProgress.style.stroke = isWorkSession ? 'var(--accent-secondary)' : 'var(--accent-primary)';
+        },
 
         initNotepad() {
             this.notepadCtx = this.dom.notepadCanvas.getContext('2d');
