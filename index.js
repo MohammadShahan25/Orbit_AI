@@ -1,5 +1,3 @@
-
-
 // A debouncer function to limit the rate at which a function gets called.
 function debounce(func, wait) {
     let timeout;
@@ -20,7 +18,8 @@ document.addEventListener('DOMContentLoaded', () => {
         state: {},
         pomodoroInterval: null,
         notepadSaveTimeout: null,
-        // ... other properties
+        notepadCtx: null,
+        isNotepadDrawing: false,
 
         personas: {
             commander: { name: "Commander Atlas", avatar: "fa-user-shield", systemInstruction: "You are Commander Atlas, a stern and disciplined AI leader. Your responses should be concise, direct, and mission-oriented. Address the user as 'Cadet'. Provide clear, actionable intelligence. No extraneous pleasantries." },
@@ -77,8 +76,6 @@ document.addEventListener('DOMContentLoaded', () => {
         init() {
             this.state = this.getInitialState();
 
-            // CRITICAL FIX: Define eventHandlers here inside init()
-            // This ensures that `this` inside the handler functions correctly refers to the App object.
             this.eventHandlers = {
                 'pomodoro-start-pause': () => this.togglePomodoro(),
                 'pomodoro-reset': () => this.resetPomodoro(),
@@ -93,8 +90,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 'import-log': () => document.getElementById('import-json-input').click(),
                 'manage-projects': () => this.manageProjects(),
                 'delete-selected': () => this.deleteSelectedLogs(),
-                 'view-log-entry': (e) => this.viewLogEntry(e),
+                'view-log-entry': (e) => this.viewLogEntry(e),
                 'toggle-pin': (e) => this.togglePin(e),
+                'change-persona': (e) => this.handlePersonaChange(e),
+                'generate-tool-response': (e) => this.handleToolGeneration(e),
             };
 
             this.loadCustomPersona();
@@ -105,42 +104,40 @@ document.addEventListener('DOMContentLoaded', () => {
             this.render();
         },
         
-        /**
-         * Securely calls the backend proxy to get an AI response.
-         * @param {object} payload - The data to send to the backend.
-         * @param {string} payload.prompt - The user's prompt.
-         * @param {object} [payload.tool] - The tool object, if any.
-         * @param {object} [payload.persona] - The persona object.
-         * @param {Array} [payload.chatHistory] - The history for chat sessions.
-         * @returns {Promise<string>} - The AI-generated text.
-         */
         async _getAIResponse(payload) {
             this.state.aiIsLoading = true;
-            // You might want to update the UI to show a loading state here.
-            
+            this.showLoadingModal();
+
             try {
                 const response = await fetch('/api/generate', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
                 });
 
                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                    let errorMsg = `AI server error (status: ${response.status}).`;
+                    try {
+                        // Most specific error from our API function
+                        const errorData = await response.json();
+                        errorMsg = errorData.error || JSON.stringify(errorData);
+                    } catch (jsonError) {
+                        // Fallback for non-JSON responses (like Vercel's HTML error pages)
+                        const textError = await response.text();
+                        console.error("Non-JSON error response from server:", textError);
+                        errorMsg = "The server returned an unexpected response. This can happen during deployment. Check the server logs.";
+                    }
+                    throw new Error(errorMsg);
                 }
 
                 const data = await response.json();
                 return data.text;
             } catch (error) {
                 console.error("Error calling AI proxy:", error);
-                // Return a user-friendly error message
                 return `Sorry, an error occurred while contacting the AI: ${error.message}`;
             } finally {
                 this.state.aiIsLoading = false;
-                 // You might want to update the UI to hide the loading state here.
+                // The modal will be replaced by the result/error message, so no need to close it here.
             }
         },
         
@@ -148,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return {
                 aiIsLoading: false,
                 currentView: 'launch',
-                sessionPersona: 'zoe',
+                sessionPersona: this.loadData('orbit-session-persona', 'zoe'),
                 sessionGoal: localStorage.getItem('orbit-session-goal') || '',
                 log: this.loadData('orbit-captains-log', []),
                 projects: this.loadData('orbit-projects', ['Default']),
@@ -168,7 +165,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     workDuration: 25 * 60,
                     breakDuration: 5 * 60,
                 },
-                // ... any other initial state properties
             };
         },
 
@@ -214,7 +210,6 @@ document.addEventListener('DOMContentLoaded', () => {
             this.dom.sessionGoalInput.addEventListener('keyup', debounce((e) => this.handleSessionGoal(e), 500));
             this.dom.mobileNavToggle.addEventListener('click', () => this.toggleMobileNav());
 
-            // Central event delegation for actions
             document.body.addEventListener('click', (e) => {
                 const action = e.target.closest('[data-action]');
                 if (!action) return;
@@ -225,15 +220,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
-            // Modal closing events
             this.dom.modalCloseBtn.addEventListener('click', () => this.closeModal());
             this.dom.modal.addEventListener('click', (e) => {
-                if (e.target === this.dom.modal) {
-                    this.closeModal();
-                }
+                if (e.target === this.dom.modal) this.closeModal();
             });
 
-            // Specific listeners for non-action elements
             this.dom.logSearch.addEventListener('input', debounce((e) => {
                 this.state.logSearchTerm = e.target.value;
                 this.renderLog();
@@ -249,50 +240,50 @@ document.addEventListener('DOMContentLoaded', () => {
              document.getElementById('import-json-input').addEventListener('change', (e) => this.importLog(e));
         },
 
-        // --- Core App Logic ---
         launchApp() {
             this.dom.launchRocket.classList.add('launching');
             setTimeout(() => {
                 this.state.currentView = 'dashboard';
                 this.dom.launchScreen.style.display = 'none';
                 this.dom.mainDashboard.classList.add('visible');
-                // Stagger animations for widgets
                 document.querySelectorAll('.dashboard-widget, .content-section').forEach((el, index) => {
                     el.style.animationDelay = `${index * 100}ms`;
                 });
             }, 1000);
         },
         
-        async openToolModal(tool) {
-            const prompt = "Example prompt for " + tool.name;
-            this.showLoadingModal();
-            const persona = this.personas[this.state.sessionPersona];
-            const responseText = await this._getAIResponse({ prompt, tool, persona });
-            this.showModalResult(tool, responseText);
-        },
-        
         openTool(e) {
             const toolId = e.target.closest('[data-id]').dataset.id;
             const tool = this.tools.find(t => t.id === toolId);
             if(tool) {
-                 this.showModal(`<h3>${tool.name}</h3><p>${tool.description}</p><textarea id="tool-prompt-input" class="input-field" placeholder="${tool.promptLabel}"></textarea><button id="tool-generate-btn" class="btn">Generate</button>`);
-                 document.getElementById('tool-generate-btn').addEventListener('click', async () => {
-                    const prompt = document.getElementById('tool-prompt-input').value;
-                    if (!prompt) {
-                        alert("Please enter a prompt.");
-                        return;
-                    }
-                    this.showLoadingModal();
-                    const persona = this.personas[this.state.sessionPersona];
-                    const responseText = await this._getAIResponse({ prompt, tool, persona });
-                    // This part will need more advanced rendering based on the tool
-                    this.showModalResult(tool, responseText, prompt);
-                 });
+                const modalContent = `
+                    <h3>${tool.name}</h3>
+                    <p>${tool.description}</p>
+                    <textarea id="tool-prompt-input" class="input-field" placeholder="${tool.promptLabel}"></textarea>
+                    <div class="modal-actions">
+                        <button class="btn" data-action="generate-tool-response" data-tool-id="${tool.id}">Generate</button>
+                    </div>`;
+                this.showModal(modalContent);
             }
         },
 
+        async handleToolGeneration(e) {
+            const button = e.target.closest('[data-tool-id]');
+            const toolId = button.dataset.toolId;
+            const tool = this.tools.find(t => t.id === toolId);
+            const prompt = document.getElementById('tool-prompt-input').value;
+
+            if (!prompt) {
+                alert("Please enter a prompt.");
+                return;
+            }
+
+            const responseText = await this._getAIResponse({ prompt, tool, persona: this.personas[this.state.sessionPersona] });
+            this.showModalResult(tool, responseText, prompt);
+        },
+
         openToolInfo(e) {
-            e.stopPropagation(); // Prevent the 'open-tool' action on the parent card from firing
+            e.stopPropagation();
             const toolId = e.target.closest('[data-id]').dataset.id;
             const tool = this.tools.find(t => t.id === toolId);
             if (tool) {
@@ -305,7 +296,7 @@ document.addEventListener('DOMContentLoaded', () => {
         },
 
         openChat() {
-            // Logic to open chat modal will now use _getAIResponse
+            this.state.currentChatSession = { history: [] };
             this.showModal(`
                 <h3><i class="fas ${this.personas[this.state.sessionPersona].avatar}"></i> Chat with ${this.personas[this.state.sessionPersona].name}</h3>
                 <div class="chat-window"></div>
@@ -314,7 +305,45 @@ document.addEventListener('DOMContentLoaded', () => {
                     <button class="btn" type="submit">Send</button>
                 </form>
             `);
-             // Chat logic would be handled here
+            document.getElementById('chat-form').addEventListener('submit', (e) => this.handleChatSubmit(e));
+        },
+        
+        async handleChatSubmit(e) {
+            e.preventDefault();
+            const chatInput = document.getElementById('chat-input');
+            const prompt = chatInput.value.trim();
+            if (!prompt) return;
+
+            const chatWindow = document.querySelector('.chat-window');
+            chatInput.value = '';
+            chatInput.focus();
+
+            this.appendChatMessage(prompt, 'user');
+            this.state.currentChatSession.history.push({ role: 'user', parts: [{ text: prompt }] });
+            
+            const loadingIndicator = this.appendChatMessage('<div class="loading-dots"><div></div><div></div><div></div></div>', 'model', true);
+            
+            const responseText = await this._getAIResponse({ 
+                prompt, 
+                chatHistory: this.state.currentChatSession.history.slice(0, -1), // Send history without current prompt
+                persona: this.personas[this.state.sessionPersona] 
+            });
+
+            loadingIndicator.remove();
+            this.appendChatMessage(responseText, 'model');
+            this.state.currentChatSession.history.push({ role: 'model', parts: [{ text: responseText }] });
+        },
+
+        appendChatMessage(text, sender, isTemp = false) {
+            const chatWindow = document.querySelector('.chat-window');
+            const messageWrapper = document.createElement('div');
+            messageWrapper.className = `chat-message ${sender}-message`;
+            const messageDiv = document.createElement('div');
+            messageDiv.innerHTML = text.replace(/\n/g, '<br>');
+            messageWrapper.appendChild(messageDiv);
+            chatWindow.appendChild(messageWrapper);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+            if (isTemp) return messageWrapper;
         },
 
         showLoadingModal() {
@@ -323,7 +352,6 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         
         showModalResult(tool, responseText, prompt) {
-            // A more sophisticated version would handle different response types (JSON for flashcards, etc.)
             const content = `
                 <h3>${tool.name} Result</h3>
                 <div class="feedback-box"><p><strong>Your Prompt:</strong> ${prompt}</p></div>
@@ -339,10 +367,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         closeModal() {
             this.dom.modal.classList.remove('active');
-            this.dom.modalBody.innerHTML = ''; // Clear content
+            this.dom.modalBody.innerHTML = '';
         },
 
-        // --- Utility Functions ---
         loadData(key, defaultValue) {
             try {
                 const data = localStorage.getItem(key);
@@ -361,24 +388,19 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         },
         
-        // ... The rest of the App's methods would go here (render, pomodoro, notepad, etc.)
-        // Assume they are complete and correct.
-        
         render() {
-           // This function would update the entire UI based on the current state.
            this.renderSidebar();
            this.renderAiCommandCenter();
            this.renderLog();
-           // etc.
+           this.updateCompanionWidget();
         },
         
         renderSidebar() {
-            // Renders both desktop and mobile sidebars
             const sidebarContent = `
                 <h3><i class="fas fa-user-cog"></i> AI Persona</h3>
                 <div class="companion-profile-grid">
                     ${Object.entries(this.personas).map(([id, persona]) => `
-                        <div class="persona-card ${this.state.sessionPersona === id ? 'active' : ''}" data-id="${id}">
+                        <div class="persona-card ${this.state.sessionPersona === id ? 'active' : ''}" data-action="change-persona" data-id="${id}">
                             <i class="fas ${persona.avatar}"></i>
                             <h5>${persona.name}</h5>
                         </div>
@@ -392,9 +414,6 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
             this.dom.desktopSidebar.innerHTML = sidebarContent;
             this.dom.mobileNavPanel.innerHTML = sidebarContent;
-
-            this.dom.desktopSidebar.querySelector('.companion-profile-grid').addEventListener('click', (e) => this.handlePersonaChange(e));
-            this.dom.mobileNavPanel.querySelector('.companion-profile-grid').addEventListener('click', (e) => this.handlePersonaChange(e));
         },
 
         renderAiCommandCenter() {
@@ -408,7 +427,6 @@ document.addEventListener('DOMContentLoaded', () => {
         },
 
         renderLog() {
-             // Renders the captain's log entries
             const { log, logFilterTool, logFilterProject, logSearchTerm } = this.state;
             const filteredLogs = log.filter(entry => {
                 const matchesTool = logFilterTool === 'all' || entry.toolId === logFilterTool;
@@ -445,18 +463,116 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         },
 
-
-        loadCustomPersona() { /* ... */ },
         initPomodoro() { /* ... */ },
         togglePomodoro() { /* ... */ },
         resetPomodoro() { /* ... */ },
-        initNotepad() { /* ... */ },
-        handleSessionGoal() { /* ... */ },
-        toggleMobileNav() { /* ... */ },
-        handlePersonaChange() { /* ... */ },
-        setNotepadMode() { /* ... */ },
-        setDrawTool() { /* ... */ },
-        clearCanvas() { /* ... */ },
+
+        initNotepad() {
+            this.notepadCtx = this.dom.notepadCanvas.getContext('2d');
+            this.dom.notepadArea.value = this.state.notepadContent;
+            
+            const resizeCanvas = () => {
+                const container = this.dom.notepadWidget; // Changed this to the resizable element
+                if (!container) return;
+                const rect = container.getBoundingClientRect();
+                const style = window.getComputedStyle(container);
+                const paddingLeft = parseFloat(style.paddingLeft);
+                const paddingRight = parseFloat(style.paddingRight);
+                const paddingTop = parseFloat(style.paddingTop);
+                const paddingBottom = parseFloat(style.paddingBottom);
+
+                const contentContainer = this.dom.notepadContentContainer;
+                if (!contentContainer) return;
+                const contentRect = contentContainer.getBoundingClientRect();
+
+                this.dom.notepadCanvas.width = contentRect.width;
+                this.dom.notepadCanvas.height = contentRect.height;
+            };
+            
+            resizeCanvas();
+            new ResizeObserver(debounce(resizeCanvas, 50)).observe(this.dom.notepadWidget);
+
+            const startDrawing = (e) => {
+                this.isNotepadDrawing = true;
+                this.drawOnNotepad(e);
+            };
+            const stopDrawing = () => { this.isNotepadDrawing = false; this.notepadCtx.beginPath(); };
+            
+            this.dom.notepadCanvas.addEventListener('mousedown', startDrawing);
+            this.dom.notepadCanvas.addEventListener('mousemove', (e) => this.drawOnNotepad(e));
+            this.dom.notepadCanvas.addEventListener('mouseup', stopDrawing);
+            this.dom.notepadCanvas.addEventListener('mouseout', stopDrawing);
+        },
+
+        drawOnNotepad(e) {
+            if (!this.isNotepadDrawing) return;
+            this.notepadCtx.lineWidth = document.getElementById('draw-width').value;
+            this.notepadCtx.lineCap = 'round';
+            
+            // Adjust for the tool
+            this.setDrawTool(this.state.notepadDrawTool);
+            if (this.state.notepadDrawTool === 'pencil') {
+                this.notepadCtx.strokeStyle = document.getElementById('draw-color').value;
+            } else {
+                 this.notepadCtx.strokeStyle = 'rgba(0,0,0,1)'; // For eraser
+            }
+
+            this.notepadCtx.lineTo(e.offsetX, e.offsetY);
+            this.notepadCtx.stroke();
+            this.notepadCtx.beginPath();
+            this.notepadCtx.moveTo(e.offsetX, e.offsetY);
+        },
+
+        setNotepadMode(mode) {
+            if (this.state.notepadMode === mode) return;
+            this.state.notepadMode = mode;
+            this.dom.notepadArea.style.display = mode === 'text' ? 'block' : 'none';
+            this.dom.notepadCanvas.style.display = mode === 'draw' ? 'block' : 'none';
+            this.dom.notepadDrawControls.style.display = mode === 'draw' ? 'flex' : 'none';
+            this.dom.notepadModeToggle.querySelectorAll('.toggle-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.mode === mode);
+            });
+        },
+
+        setDrawTool(tool) {
+            this.state.notepadDrawTool = tool;
+            this.notepadCtx.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
+            this.dom.notepadDrawControls.querySelectorAll('[data-action="set-draw-tool"]').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tool === tool);
+            });
+        },
+
+        clearCanvas() {
+            this.notepadCtx.clearRect(0, 0, this.dom.notepadCanvas.width, this.dom.notepadCanvas.height);
+        },
+
+        handleSessionGoal(e) { 
+            this.state.sessionGoal = e.target.value;
+            this.saveData('orbit-session-goal', this.state.sessionGoal);
+        },
+        
+        toggleMobileNav() {
+            this.state.isMobileNavOpen = !this.state.isMobileNavOpen;
+            this.dom.mobileNavPanel.classList.toggle('open', this.state.isMobileNavOpen);
+        },
+        
+        handlePersonaChange(e) {
+            const card = e.target.closest('[data-id]');
+            if (!card) return;
+            const personaId = card.dataset.id;
+            this.state.sessionPersona = personaId;
+            this.saveData('orbit-session-persona', personaId);
+            this.renderSidebar();
+            this.updateCompanionWidget();
+        },
+        
+        updateCompanionWidget() {
+            const persona = this.personas[this.state.sessionPersona];
+            this.dom.companionAvatar.innerHTML = `<i class="fas ${persona.avatar}"></i>`;
+            this.dom.companionChatBubble.textContent = `Ready to assist.`;
+        },
+        
+        loadCustomPersona() { /* ... */ },
         viewLogEntry() { /* ... */ },
         togglePin() { /* ... */ },
         exportSelectedLogs() { /* ... */ },
