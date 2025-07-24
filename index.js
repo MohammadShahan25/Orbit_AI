@@ -116,20 +116,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     body: JSON.stringify(payload),
                 });
         
-                // Read the response body once, regardless of status, as text
                 const responseText = await response.text();
         
                 if (!response.ok) {
                     let errorMsg;
                     try {
-                        // Try to parse the text as JSON for a structured error message
                         const errorData = JSON.parse(responseText);
                         errorMsg = errorData.error || responseText;
                     } catch (e) {
-                        // If it's not JSON, use the raw text (e.g., Vercel's HTML error page)
                         console.error("Non-JSON error response from server:", responseText);
-                        if (responseText.toLowerCase().includes('<html')) {
-                             errorMsg = "The server returned an unexpected response. This can happen during deployment. Check the server logs for details.";
+                        if (responseText.toLowerCase().includes('<html') || responseText.includes('FUNCTION_INVOCATION_FAILED')) {
+                             errorMsg = "A server error has occurred. This is often temporary; please try again in a moment. If the problem persists, check the server logs.";
                         } else {
                             errorMsg = responseText || `AI server error (status: ${response.status})`;
                         }
@@ -137,17 +134,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     throw new Error(errorMsg);
                 }
                 
-                // On success, parse the response text
                 const data = JSON.parse(responseText);
                 return data.text;
                 
             } catch (error) {
                 console.error("Error calling AI proxy:", error);
-                // Return a user-friendly error message, using the message from the thrown Error
                 return `Sorry, an error occurred while contacting the AI: ${error.message}`;
             } finally {
                 this.state.aiIsLoading = false;
-                // The modal will be replaced by the result/error message.
             }
         },
         
@@ -335,7 +329,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const responseText = await this._getAIResponse({ 
                 prompt, 
-                chatHistory: this.state.currentChatSession.history.slice(0, -1), // Send history without current prompt
+                chatHistory: this.state.currentChatSession.history.slice(0, -1),
                 persona: this.personas[this.state.sessionPersona] 
             });
 
@@ -473,45 +467,48 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         },
 
+        // --- Rewritten Pomodoro Logic ---
         initPomodoro() {
             this.updatePomodoroDisplay();
+            // This single interval drives the timer.
+            this.pomodoroInterval = setInterval(() => this.pomodoroTick(), 1000);
         },
+
+        pomodoroTick() {
+            if (!this.state.pomodoro.isRunning) {
+                return; // Do nothing if paused
+            }
+
+            this.state.pomodoro.timeRemaining--;
+
+            if (this.state.pomodoro.timeRemaining < 0) {
+                this.switchPomodoroSession();
+            }
+
+            this.updatePomodoroDisplay();
+        },
+
+        switchPomodoroSession() {
+            this.state.pomodoro.isWorkSession = !this.state.pomodoro.isWorkSession;
+            this.state.pomodoro.timeRemaining = this.state.pomodoro.isWorkSession 
+                ? this.state.pomodoro.workDuration 
+                : this.state.pomodoro.breakDuration;
+            // The timer continues automatically due to the single interval in initPomodoro
+        },
+
         togglePomodoro() {
             this.state.pomodoro.isRunning = !this.state.pomodoro.isRunning;
-            if (this.state.pomodoro.isRunning) {
-                this.startPomodoroInterval();
-                this.dom.pomodoroControls.querySelector('[data-action="pomodoro-start-pause"] i').className = 'fas fa-pause';
-            } else {
-                clearInterval(this.pomodoroInterval);
-                this.dom.pomodoroControls.querySelector('[data-action="pomodoro-start-pause"] i').className = 'fas fa-play';
-            }
+            this.dom.pomodoroControls.querySelector('[data-action="pomodoro-start-pause"] i').className = this.state.pomodoro.isRunning ? 'fas fa-pause' : 'fas fa-play';
         },
+
         resetPomodoro() {
-            clearInterval(this.pomodoroInterval);
             this.state.pomodoro.isRunning = false;
             this.state.pomodoro.isWorkSession = true;
             this.state.pomodoro.timeRemaining = this.state.pomodoro.workDuration;
             this.updatePomodoroDisplay();
             this.dom.pomodoroControls.querySelector('[data-action="pomodoro-start-pause"] i').className = 'fas fa-play';
         },
-        startPomodoroInterval() {
-            this.pomodoroInterval = setInterval(() => {
-                this.state.pomodoro.timeRemaining--;
-                this.updatePomodoroDisplay();
-                if (this.state.pomodoro.timeRemaining < 0) {
-                    clearInterval(this.pomodoroInterval);
-                    this.switchPomodoroSession();
-                }
-            }, 1000);
-        },
-        switchPomodoroSession() {
-            this.state.pomodoro.isWorkSession = !this.state.pomodoro.isWorkSession;
-            this.state.pomodoro.timeRemaining = this.state.pomodoro.isWorkSession 
-                ? this.state.pomodoro.workDuration 
-                : this.state.pomodoro.breakDuration;
-            this.updatePomodoroDisplay();
-            this.startPomodoroInterval(); // Auto-start next session
-        },
+        
         updatePomodoroDisplay() {
             const { timeRemaining, isWorkSession } = this.state.pomodoro;
             const duration = isWorkSession ? this.state.pomodoro.workDuration : this.state.pomodoro.breakDuration;
@@ -521,9 +518,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const radius = this.dom.pomodoroProgress.r.baseVal.value;
             const circumference = 2 * Math.PI * radius;
-            const offset = circumference - (timeRemaining / duration) * circumference;
+            const progress = timeRemaining / duration;
+            const offset = circumference * (1 - progress);
+            
             this.dom.pomodoroProgress.style.strokeDasharray = circumference;
-            this.dom.pomodoroProgress.style.strokeDashoffset = isNaN(offset) ? circumference : offset;
+            this.dom.pomodoroProgress.style.strokeDashoffset = isNaN(offset) ? 0 : offset;
 
             this.dom.pomodoroStatus.textContent = isWorkSession ? 'Work Session' : 'Break Session';
             this.dom.pomodoroProgress.style.stroke = isWorkSession ? 'var(--accent-secondary)' : 'var(--accent-primary)';
@@ -534,7 +533,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.dom.notepadArea.value = this.state.notepadContent;
             
             const resizeCanvas = () => {
-                const container = this.dom.notepadWidget; // Changed this to the resizable element
+                const container = this.dom.notepadWidget; 
                 if (!container) return;
                 const rect = container.getBoundingClientRect();
                 const style = window.getComputedStyle(container);
@@ -571,12 +570,11 @@ document.addEventListener('DOMContentLoaded', () => {
             this.notepadCtx.lineWidth = document.getElementById('draw-width').value;
             this.notepadCtx.lineCap = 'round';
             
-            // Adjust for the tool
             this.setDrawTool(this.state.notepadDrawTool);
             if (this.state.notepadDrawTool === 'pencil') {
                 this.notepadCtx.strokeStyle = document.getElementById('draw-color').value;
             } else {
-                 this.notepadCtx.strokeStyle = 'rgba(0,0,0,1)'; // For eraser
+                 this.notepadCtx.strokeStyle = 'rgba(0,0,0,1)'; 
             }
 
             this.notepadCtx.lineTo(e.offsetX, e.offsetY);
