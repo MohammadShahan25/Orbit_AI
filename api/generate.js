@@ -29,10 +29,16 @@ export default async function handler(request, response) {
             systemInstruction,
         };
         
-        let contents = prompt;
-        if (chatHistory) {
-             contents = [...chatHistory, { role: 'user', parts: [{ text: prompt }] }];
+        // This is the critical fix: Ensure `contents` is always a structured array.
+        let contents;
+        if (chatHistory && chatHistory.length > 0) {
+            // For chat, build the full history array
+            contents = [...chatHistory, { role: 'user', parts: [{ text: prompt }] }];
+        } else {
+            // For single-turn tool requests, create the basic user prompt structure
+            contents = [{ role: 'user', parts: [{ text: prompt }] }];
         }
+
 
         // Handle special configurations for specific tools
         if (tool?.id === 'flashcards') {
