@@ -76,13 +76,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
         init() {
             this.state = this.getInitialState();
+
+            // CRITICAL FIX: Define eventHandlers here inside init()
+            // This ensures that `this` inside the handler functions correctly refers to the App object.
+            this.eventHandlers = {
+                'pomodoro-start-pause': () => this.togglePomodoro(),
+                'pomodoro-reset': () => this.resetPomodoro(),
+                'set-notepad-mode': (e) => this.setNotepadMode(e.target.closest('[data-mode]').dataset.mode),
+                'set-draw-tool': (e) => this.setDrawTool(e.target.closest('[data-tool]').dataset.tool),
+                'clear-canvas': () => this.clearCanvas(),
+                'open-chat': () => this.openChat(),
+                'open-tool-info': (e) => this.openToolInfo(e),
+                'open-tool': (e) => this.openTool(e),
+                'export-selected': () => this.exportSelectedLogs(),
+                'export-all-json': () => this.exportLog(true),
+                'import-log': () => document.getElementById('import-json-input').click(),
+                'manage-projects': () => this.manageProjects(),
+                'delete-selected': () => this.deleteSelectedLogs(),
+                 'view-log-entry': (e) => this.viewLogEntry(e),
+                'toggle-pin': (e) => this.togglePin(e),
+            };
+
             this.loadCustomPersona();
             this.cacheDOM();
             this.bindEvents();
             this.initPomodoro();
             this.initNotepad();
             this.render();
-            // No AI initialization needed on the client-side anymore.
         },
         
         /**
@@ -194,7 +214,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.dom.sessionGoalInput.addEventListener('keyup', debounce((e) => this.handleSessionGoal(e), 500));
             this.dom.mobileNavToggle.addEventListener('click', () => this.toggleMobileNav());
 
-            // Use event delegation for dynamically created elements
+            // Central event delegation for actions
             document.body.addEventListener('click', (e) => {
                 const action = e.target.closest('[data-action]');
                 if (!action) return;
@@ -205,7 +225,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
-            // Specific event listeners
+            // Modal closing events
+            this.dom.modalCloseBtn.addEventListener('click', () => this.closeModal());
+            this.dom.modal.addEventListener('click', (e) => {
+                if (e.target === this.dom.modal) {
+                    this.closeModal();
+                }
+            });
+
+            // Specific listeners for non-action elements
             this.dom.logSearch.addEventListener('input', debounce((e) => {
                 this.state.logSearchTerm = e.target.value;
                 this.renderLog();
@@ -219,23 +247,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.renderLog();
             });
              document.getElementById('import-json-input').addEventListener('change', (e) => this.importLog(e));
-        },
-        
-        // Centralized event handlers for data-action attributes
-        eventHandlers: {
-            'pomodoro-start-pause': () => this.togglePomodoro(),
-            'pomodoro-reset': () => this.resetPomodoro(),
-            'set-notepad-mode': (e) => this.setNotepadMode(e.target.closest('[data-mode]').dataset.mode),
-            'set-draw-tool': (e) => this.setDrawTool(e.target.closest('[data-tool]').dataset.tool),
-            'clear-canvas': () => this.clearCanvas(),
-            'open-chat': () => this.openChat(),
-            'open-tool-info': (e) => this.openToolInfo(e),
-            'open-tool': (e) => this.openTool(e),
-            'export-selected': () => this.exportSelectedLogs(),
-            'export-all-json': () => this.exportLog(true),
-            'import-log': () => document.getElementById('import-json-input').click(),
-            'manage-projects': () => this.manageProjects(),
-            'delete-selected': () => this.deleteSelectedLogs(),
         },
 
         // --- Core App Logic ---
@@ -253,35 +264,72 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         
         async openToolModal(tool) {
-            // This is an example of converting a function to use the new proxy
-            const prompt = "Example prompt for " + tool.name; // In a real scenario, you'd get this from a form
-            
-            // Show loading state
-            this.dom.modalBody.innerHTML = `<div class="loading-container"><div class="loading-dots"><div></div><div></div><div></div></div><p>Generating response...</p></div>`;
-            this.dom.modal.classList.add('active');
-
+            const prompt = "Example prompt for " + tool.name;
+            this.showLoadingModal();
             const persona = this.personas[this.state.sessionPersona];
             const responseText = await this._getAIResponse({ prompt, tool, persona });
-
-            // Display the result
-            this.dom.modalBody.innerHTML = `
-                <h3>${tool.name} Result</h3>
-                <p>${responseText.replace(/\n/g, '<br>')}</p>
-            `;
-        },
-
-        openChat() {
-            // Logic to open chat modal will now use _getAIResponse
+            this.showModalResult(tool, responseText);
         },
         
         openTool(e) {
             const toolId = e.target.closest('[data-id]').dataset.id;
             const tool = this.tools.find(t => t.id === toolId);
             if(tool) {
-                 // The openToolModal now needs to be adapted to handle user input before calling the API
-                 // For now, we'll just open a placeholder modal
-                 this.showModal(`<h3>${tool.name}</h3><p>${tool.description}</p><textarea class="input-field" placeholder="${tool.promptLabel}"></textarea><button class="btn">Generate</button>`);
+                 this.showModal(`<h3>${tool.name}</h3><p>${tool.description}</p><textarea id="tool-prompt-input" class="input-field" placeholder="${tool.promptLabel}"></textarea><button id="tool-generate-btn" class="btn">Generate</button>`);
+                 document.getElementById('tool-generate-btn').addEventListener('click', async () => {
+                    const prompt = document.getElementById('tool-prompt-input').value;
+                    if (!prompt) {
+                        alert("Please enter a prompt.");
+                        return;
+                    }
+                    this.showLoadingModal();
+                    const persona = this.personas[this.state.sessionPersona];
+                    const responseText = await this._getAIResponse({ prompt, tool, persona });
+                    // This part will need more advanced rendering based on the tool
+                    this.showModalResult(tool, responseText, prompt);
+                 });
             }
+        },
+
+        openToolInfo(e) {
+            e.stopPropagation(); // Prevent the 'open-tool' action on the parent card from firing
+            const toolId = e.target.closest('[data-id]').dataset.id;
+            const tool = this.tools.find(t => t.id === toolId);
+            if (tool) {
+                this.showModal(`
+                    <h3><i class="fas ${tool.icon}"></i> ${tool.name}</h3>
+                    <p>${tool.description}</p>
+                    ${tool.systemInstruction ? `<div class="feedback-box"><p><strong>System Instruction:</strong></p><p><em>${tool.systemInstruction}</em></p></div>` : ''}
+                `);
+            }
+        },
+
+        openChat() {
+            // Logic to open chat modal will now use _getAIResponse
+            this.showModal(`
+                <h3><i class="fas ${this.personas[this.state.sessionPersona].avatar}"></i> Chat with ${this.personas[this.state.sessionPersona].name}</h3>
+                <div class="chat-window"></div>
+                <form id="chat-form" class="chat-input-container">
+                    <textarea id="chat-input" class="input-field" placeholder="Type your message..."></textarea>
+                    <button class="btn" type="submit">Send</button>
+                </form>
+            `);
+             // Chat logic would be handled here
+        },
+
+        showLoadingModal() {
+            const content = `<div class="loading-container"><div class="loading-dots"><div></div><div></div><div></div></div><p>Generating response...</p></div>`;
+            this.showModal(content);
+        },
+        
+        showModalResult(tool, responseText, prompt) {
+            // A more sophisticated version would handle different response types (JSON for flashcards, etc.)
+            const content = `
+                <h3>${tool.name} Result</h3>
+                <div class="feedback-box"><p><strong>Your Prompt:</strong> ${prompt}</p></div>
+                <div style="margin-top: 1rem;">${responseText.replace(/\n/g, '<br>')}</div>
+            `;
+             this.showModal(content);
         },
 
         showModal(content) {
@@ -289,6 +337,10 @@ document.addEventListener('DOMContentLoaded', () => {
              this.dom.modal.classList.add('active');
         },
 
+        closeModal() {
+            this.dom.modal.classList.remove('active');
+            this.dom.modalBody.innerHTML = ''; // Clear content
+        },
 
         // --- Utility Functions ---
         loadData(key, defaultValue) {
@@ -396,6 +448,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         loadCustomPersona() { /* ... */ },
         initPomodoro() { /* ... */ },
+        togglePomodoro() { /* ... */ },
+        resetPomodoro() { /* ... */ },
         initNotepad() { /* ... */ },
         handleSessionGoal() { /* ... */ },
         toggleMobileNav() { /* ... */ },
@@ -403,7 +457,13 @@ document.addEventListener('DOMContentLoaded', () => {
         setNotepadMode() { /* ... */ },
         setDrawTool() { /* ... */ },
         clearCanvas() { /* ... */ },
-        // ... other methods
+        viewLogEntry() { /* ... */ },
+        togglePin() { /* ... */ },
+        exportSelectedLogs() { /* ... */ },
+        exportLog() { /* ... */ },
+        importLog() { /* ... */ },
+        manageProjects() { /* ... */ },
+        deleteSelectedLogs() { /* ... */ },
     };
 
     App.init();
