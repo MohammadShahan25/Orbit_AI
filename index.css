@@ -546,6 +546,14 @@ main {
     border: 5px solid transparent;
     border-right-color: var(--bg-tertiary);
 }
+.companion-interaction.disabled .companion-avatar {
+    color: var(--text-muted);
+    cursor: not-allowed;
+}
+.companion-interaction.disabled .companion-avatar:hover {
+    transform: none;
+}
+
 
 /* --- Content Sections --- */
 .content-section {
@@ -709,6 +717,27 @@ main {
     z-index: 5;
 }
 .tool-info-btn:hover { color: var(--text-color); }
+
+.ai-tool-card.disabled {
+    grid-column: 1 / -1;
+    cursor: not-allowed;
+    background: var(--bg-tertiary);
+    border-color: transparent;
+}
+.ai-tool-card.disabled:hover {
+    transform: none;
+    box-shadow: var(--shadow);
+    border-color: transparent;
+}
+.ai-tool-card.disabled::before {
+    display: none;
+}
+.ai-tool-card.disabled i {
+    color: var(--text-muted);
+}
+.ai-tool-card.disabled:hover i {
+    transform: none;
+}
 
 
 /* --- Modal --- */
