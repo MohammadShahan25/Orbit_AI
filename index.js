@@ -1,6 +1,3 @@
-
-
-
 import { GoogleGenAI, Type } from "@google/genai";
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -67,9 +64,8 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
             } catch (error) {
-                console.error("Fatal Error: Failed to initialize GoogleGenAI.", error);
-                document.body.innerHTML = "<div style='text-align: center; padding: 2rem; color: white;'><h1>Error: API Key is not configured.</h1><p>Please ensure the API_KEY environment variable is set correctly for this application to function.</p></div>";
-                return;
+                console.error("AI functionality disabled: Failed to initialize GoogleGenAI. Please ensure the API_KEY environment variable is set.", error);
+                this.ai = null;
             }
             this.state = this.getInitialState();
             this.loadCustomPersona();
@@ -195,6 +191,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!actionTarget) return;
 
             const action = actionTarget.dataset.action;
+            const isAiAction = ['ai-tool-select', 'open-chat', 'start-interview'].includes(action);
+
+            if (isAiAction && !this.ai) {
+                alert('AI features are disabled. Please configure the API_KEY environment variable.');
+                return;
+            }
+
             const { toolId, logIndex, personaKey, project, interviewType, mode, tool } = actionTarget.dataset;
             
             const actions = {
@@ -303,6 +306,15 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         
         renderAiCompanionWidget() {
+            if (!this.ai) {
+                this.dom.aiCompanionWidget.innerHTML = `
+                    <h3>AI Companion</h3>
+                    <div class="companion-interaction disabled">
+                        <div class="companion-avatar" title="AI is offline"><i class="fas fa-power-off"></i></div>
+                        <div class="companion-chat-bubble">AI is offline. API key not configured.</div>
+                    </div>`;
+                return;
+            }
             const persona = this.personas[this.state.sessionPersona];
             this.dom.aiCompanionWidget.innerHTML = `
                 <h3>AI Companion: ${persona.name}</h3>
@@ -315,6 +327,20 @@ document.addEventListener('DOMContentLoaded', () => {
         },
 
         renderCommandGrid() {
+            if (!this.ai) {
+                this.dom.aiCommandGrid.style.gridTemplateColumns = '1fr';
+                this.dom.aiCommandGrid.innerHTML = `
+                   <div class="ai-tool-card disabled">
+                       <i class="fas fa-power-off"></i>
+                       <h4>AI Tools Offline</h4>
+                       <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 1rem; font-family: var(--font-secondary);">
+                           AI features are unavailable because the API Key is not configured.
+                       </p>
+                   </div>`;
+               return;
+           }
+           // Reset style if it was set before
+           this.dom.aiCommandGrid.style.gridTemplateColumns = '';
             this.dom.aiCommandGrid.innerHTML = this.tools.map(tool => `
                 <div class="ai-tool-card" data-action="ai-tool-select" data-tool-id="${tool.id}">
                      <button class="tool-info-btn" data-action="show-tool-info" data-tool-id="${tool.id}" title="Tool Info"><i class="fas fa-info-circle"></i></button>
