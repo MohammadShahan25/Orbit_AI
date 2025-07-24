@@ -1,0 +1,148 @@
+
+<script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://esm.sh/@google/genai@^1.10.0"
+  }
+}
+</script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orbit - AI Toolkit for Students</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <div id="app-container">
+        <!-- Launch Screen -->
+        <div id="launch-screen">
+            <div class="launch-content">
+                <i id="launch-rocket" class="fas fa-space-shuttle"></i>
+                <h1>Welcome to Orbit</h1>
+                <p>Your AI-powered toolkit for academic excellence.</p>
+                <button id="launch-btn" class="btn">Launch Dashboard</button>
+            </div>
+        </div>
+
+        <!-- Main Dashboard -->
+        <div id="main-dashboard">
+            <header>
+                <div class="header-content">
+                    <h1><i class="fas fa-rocket"></i> Orbit</h1>
+                    <div class="session-goal-container">
+                        <label for="session-goal-input">Today's Mission:</label>
+                        <input type="text" id="session-goal-input" placeholder="e.g., Draft my history essay outline...">
+                    </div>
+                    <button id="mobile-nav-toggle"><i class="fas fa-bars"></i></button>
+                </div>
+            </header>
+
+            <div class="dashboard-layout">
+                <aside id="desktop-sidebar"></aside>
+                <nav id="mobile-nav-panel"></nav>
+
+                <main>
+                    <div class="dashboard-grid">
+                        <!-- Productivity Widgets -->
+                        <div class="dashboard-widget animate-in" id="pomodoro-widget">
+                            <h3>Pomodoro Timer</h3>
+                            <div class="pomodoro-timer">
+                                <svg class="pomodoro-svg" width="120" height="120" viewBox="0 0 120 120">
+                                    <circle class="pomodoro-bg" cx="60" cy="60" r="54" />
+                                    <circle class="pomodoro-progress" cx="60" cy="60" r="54" />
+                                </svg>
+                                <div id="pomodoro-time">25:00</div>
+                            </div>
+                            <div id="pomodoro-controls" class="pomodoro-controls">
+                                <button data-action="pomodoro-start-pause"><i class="fas fa-play"></i></button>
+                                <button data-action="pomodoro-reset"><i class="fas fa-undo"></i></button>
+                            </div>
+                             <div id="pomodoro-status" class="pomodoro-status">Work Session</div>
+                        </div>
+
+                        <div class="dashboard-widget animate-in" id="notepad-widget">
+                            <div class="notepad-header">
+                                <h3>Quick Notepad</h3>
+                                <div class="notepad-mode-toggle">
+                                    <button class="toggle-btn active" data-mode="text" data-action="set-notepad-mode" title="Text Mode">
+                                        <i class="fas fa-font"></i>
+                                    </button>
+                                    <button class="toggle-btn" data-mode="draw" data-action="set-notepad-mode" title="Draw Mode">
+                                        <i class="fas fa-pencil-alt"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="notepad-draw-controls">
+                                <button data-action="set-draw-tool" data-tool="pencil" class="btn-icon active" title="Pencil"><i class="fas fa-pencil-alt"></i></button>
+                                <button data-action="set-draw-tool" data-tool="eraser" class="btn-icon" title="Eraser"><i class="fas fa-eraser"></i></button>
+                                <label for="draw-color">Color</label>
+                                <input type="color" id="draw-color" value="#FFFFFF">
+                                <label for="draw-width">Width</label>
+                                <input type="range" id="draw-width" min="1" max="20" value="2" title="Line Width">
+                                <button data-action="clear-canvas" title="Clear Canvas" class="btn-icon"><i class="fas fa-trash-alt"></i></button>
+                            </div>
+                            <div class="notepad-content-container">
+                                <textarea id="notepad-area" class="input-field" placeholder="Jot down quick notes here..."></textarea>
+                                <canvas id="notepad-canvas"></canvas>
+                            </div>
+                            <div id="notepad-status"></div>
+                        </div>
+
+                        <!-- AI Companion Widget -->
+                        <div class="dashboard-widget animate-in" id="ai-companion-widget">
+                            <h3>AI Companion</h3>
+                            <div class="companion-interaction">
+                                <div class="companion-avatar" data-action="open-chat" title="Start a Chat">
+                                    <i class="fas fa-user-astronaut"></i>
+                                </div>
+                                <div class="companion-chat-bubble">Ready to assist.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <section id="captains-log-section" class="content-section animate-in">
+                        <div class="section-header">
+                             <div class="mission-badge-container">
+                                <canvas id="mission-badge" width="100" height="100"></canvas>
+                                <div id="log-stats"></div>
+                            </div>
+                            <div class="log-controls">
+                                <input type="search" id="log-search" class="input-field" placeholder="Search log entries...">
+                                <select id="log-filter-tool" class="input-field"></select>
+                                <select id="log-filter-project" class="input-field"></select>
+                                <button class="btn" data-action="export-selected"><i class="fas fa-download"></i> Export Selected</button>
+                                <button class="btn" data-action="export-all-json"><i class="fas fa-file-export"></i> Export All (JSON)</button>
+                                <label class="btn import-label"><i class="fas fa-file-import"></i> Import (JSON)<input type="file" id="import-json-input" accept=".json" style="display:none;"></label>
+                                <button class="btn btn-secondary" data-action="manage-projects"><i class="fas fa-folder-plus"></i> Manage Projects</button>
+                                <button class="btn btn-danger" data-action="delete-selected"><i class="fas fa-trash-alt"></i> Delete Selected</button>
+                            </div>
+                        </div>
+                        <div id="log-list-container"></div>
+                    </section>
+
+                    <section id="ai-command-center" class="content-section animate-in">
+                        <h2><i class="fas fa-brain"></i> AI Command Center</h2>
+                        <p>Select a specialized AI tool for your specific task.</p>
+                        <div id="ai-command-grid" class="command-grid"></div>
+                    </section>
+                </main>
+            </div>
+        </div>
+
+        <!-- Modal -->
+        <div id="modal">
+            <div class="modal-content">
+                <button id="modal-close-btn">&times;</button>
+                <div id="modal-body"></div>
+            </div>
+        </div>
+    </div>
+    <script type="module" src="index.js"></script>
+</body>
+</html>
