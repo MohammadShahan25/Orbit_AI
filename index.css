@@ -723,6 +723,7 @@ main {
     cursor: not-allowed;
     background: var(--bg-tertiary);
     border-color: transparent;
+    text-align: center;
 }
 .ai-tool-card.disabled:hover {
     transform: none;
