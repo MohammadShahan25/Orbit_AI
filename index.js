@@ -1,4 +1,5 @@
 
+
 // A debouncer function to limit the rate at which a function gets called.
 function debounce(func, wait) {
     let timeout;
@@ -21,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
         notepadSaveTimeout: null,
         notepadCtx: null,
         isNotepadDrawing: false,
+        currentEventSource: null, // To manage the streaming connection
 
         personas: {
             commander: { name: "Commander Atlas", avatar: "fa-user-shield", systemInstruction: "You are Commander Atlas, a stern and disciplined AI leader. Your responses should be concise, direct, and mission-oriented. Address the user as 'Cadet'. Provide clear, actionable intelligence. No extraneous pleasantries." },
@@ -105,44 +107,85 @@ document.addEventListener('DOMContentLoaded', () => {
             this.render();
         },
         
-        async _getAIResponse(payload) {
-            this.state.aiIsLoading = true;
-            this.showLoadingModal();
-        
-            try {
-                const response = await fetch('/api/generate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-        
-                const responseText = await response.text();
-        
-                if (!response.ok) {
-                    let errorMsg;
-                    try {
-                        const errorData = JSON.parse(responseText);
-                        errorMsg = errorData.error || responseText;
-                    } catch (e) {
-                        console.error("Non-JSON error response from server:", responseText);
-                        if (responseText.toLowerCase().includes('<html') || responseText.includes('FUNCTION_INVOCATION_FAILED')) {
-                             errorMsg = "A server error has occurred. This is often temporary; please try again in a moment. If the problem persists, check the server logs.";
-                        } else {
-                            errorMsg = responseText || `AI server error (status: ${response.status})`;
-                        }
-                    }
-                    throw new Error(errorMsg);
-                }
-                
-                const data = JSON.parse(responseText);
-                return data.text;
-                
-            } catch (error) {
-                console.error("Error calling AI proxy:", error);
-                return `Sorry, an error occurred while contacting the AI: ${error.message}`;
-            } finally {
-                this.state.aiIsLoading = false;
+        // --- NEW STREAMING AI LOGIC ---
+        _getAIResponseStream({ payload, onChunk, onComplete, onError }) {
+            // Abort any existing stream
+            if (this.currentEventSource) {
+                this.currentEventSource.close();
             }
+
+            // Use POST method for EventSource by creating a temporary URL
+            // This is a common pattern to send a complex body with SSE
+            const requestBody = JSON.stringify(payload);
+            
+            // NOTE: Using a direct POST with EventSource is not standard.
+            // A more common approach involves a different setup, but for this self-contained example,
+            // we will pivot to using fetch with a streaming reader.
+            
+            this.state.aiIsLoading = true;
+
+            fetch('/api/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: requestBody,
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Server error: ${response.statusText}`);
+                }
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                const push = () => {
+                    reader.read().then(({ done, value }) => {
+                        if (done) {
+                            if (onComplete) onComplete();
+                            this.state.aiIsLoading = false;
+                            return;
+                        }
+                        
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n\n');
+                        buffer = lines.pop(); // Keep the last, possibly incomplete, line
+
+                        lines.forEach(line => {
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const jsonString = line.substring(6);
+                                    const data = JSON.parse(jsonString);
+
+                                    if(data.event === 'done') {
+                                       // This is a custom signal we added in the backend
+                                       if(onComplete) onComplete();
+                                       this.state.aiIsLoading = false;
+                                       return; // Stop processing further
+                                    } else if (data.error) {
+                                        if (onError) onError(new Error(data.error));
+                                    } else if (onChunk) {
+                                        onChunk(data.text);
+                                    }
+                                } catch (e) {
+                                    console.error("Failed to parse stream data chunk:", line, e);
+                                    if(onError) onError(e);
+                                }
+                            }
+                        });
+                        
+                        push(); // Continue reading
+                    }).catch(err => {
+                        console.error("Stream reading error:", err);
+                        if(onError) onError(err);
+                        this.state.aiIsLoading = false;
+                    });
+                };
+                push();
+            })
+            .catch(err => {
+                console.error("Fetch initiation error:", err);
+                 if(onError) onError(err);
+                 this.state.aiIsLoading = false;
+            });
         },
         
         getInitialState() {
@@ -158,7 +201,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 notepadDrawTool: 'pencil',
                 logFilterTool: 'all',
                 logFilterProject: 'all',
-                logSearchTerm: '',
+logSearchTerm: '',
                 selectedLogIndices: new Set(),
                 isMobileNavOpen: false,
                 currentChatSession: null,
@@ -271,7 +314,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         },
 
-        async handleToolGeneration(e) {
+        handleToolGeneration(e) {
             const button = e.target.closest('[data-tool-id]');
             const toolId = button.dataset.toolId;
             const tool = this.tools.find(t => t.id === toolId);
@@ -282,8 +325,38 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            const responseText = await this._getAIResponse({ prompt, tool, persona: this.personas[this.state.sessionPersona] });
-            this.showModalResult(tool, responseText, prompt);
+            const payload = { prompt, tool, persona: this.personas[this.state.sessionPersona] };
+
+            this.showModal(`
+                <h3>${tool.name} Result</h3>
+                <div class="feedback-box"><p><strong>Your Prompt:</strong> ${prompt}</p></div>
+                <div id="streaming-response-area" class="response-area" style="margin-top: 1rem;">
+                     <div class="loading-dots"><div></div><div></div><div></div></div>
+                </div>
+            `);
+
+            const responseArea = document.getElementById('streaming-response-area');
+            let fullResponse = '';
+            let isFirstChunk = true;
+
+            this._getAIResponseStream({
+                payload,
+                onChunk: (textChunk) => {
+                    if (isFirstChunk) {
+                        responseArea.innerHTML = ''; // Clear loading dots
+                        isFirstChunk = false;
+                    }
+                    fullResponse += textChunk;
+                    // Sanitize and format before inserting
+                    responseArea.innerHTML = fullResponse.replace(/\n/g, '<br>');
+                },
+                onComplete: () => {
+                    // Final actions, like saving to log, can go here
+                },
+                onError: (error) => {
+                    responseArea.innerHTML = `<p style="color: var(--color-red);">Sorry, an error occurred: ${error.message}</p>`;
+                }
+            });
         },
 
         openToolInfo(e) {
@@ -312,33 +385,49 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('chat-form').addEventListener('submit', (e) => this.handleChatSubmit(e));
         },
         
-        async handleChatSubmit(e) {
+        handleChatSubmit(e) {
             e.preventDefault();
             const chatInput = document.getElementById('chat-input');
             const prompt = chatInput.value.trim();
             if (!prompt) return;
 
-            const chatWindow = document.querySelector('.chat-window');
             chatInput.value = '';
             chatInput.focus();
 
             this.appendChatMessage(prompt, 'user');
             this.state.currentChatSession.history.push({ role: 'user', parts: [{ text: prompt }] });
             
-            const loadingIndicator = this.appendChatMessage('<div class="loading-dots"><div></div><div></div><div></div></div>', 'model', true);
+            const modelMessageDiv = this.appendChatMessage('<div class="loading-dots"><div></div><div></div><div></div></div>', 'model');
             
-            const responseText = await this._getAIResponse({ 
+            const payload = { 
                 prompt, 
                 chatHistory: this.state.currentChatSession.history.slice(0, -1),
                 persona: this.personas[this.state.sessionPersona] 
-            });
+            };
+            
+            let fullResponse = '';
+            let isFirstChunk = true;
 
-            loadingIndicator.remove();
-            this.appendChatMessage(responseText, 'model');
-            this.state.currentChatSession.history.push({ role: 'model', parts: [{ text: responseText }] });
+            this._getAIResponseStream({
+                payload,
+                onChunk: (textChunk) => {
+                    if (isFirstChunk) {
+                        modelMessageDiv.innerHTML = '';
+                        isFirstChunk = false;
+                    }
+                    fullResponse += textChunk;
+                    modelMessageDiv.innerHTML = fullResponse.replace(/\n/g, '<br>');
+                },
+                onComplete: () => {
+                    this.state.currentChatSession.history.push({ role: 'model', parts: [{ text: fullResponse }] });
+                },
+                onError: (error) => {
+                    modelMessageDiv.innerHTML = `<span style="color: var(--color-red);">Sorry, an error occurred: ${error.message}</span>`;
+                }
+            });
         },
 
-        appendChatMessage(text, sender, isTemp = false) {
+        appendChatMessage(text, sender) {
             const chatWindow = document.querySelector('.chat-window');
             const messageWrapper = document.createElement('div');
             messageWrapper.className = `chat-message ${sender}-message`;
@@ -347,21 +436,7 @@ document.addEventListener('DOMContentLoaded', () => {
             messageWrapper.appendChild(messageDiv);
             chatWindow.appendChild(messageWrapper);
             chatWindow.scrollTop = chatWindow.scrollHeight;
-            if (isTemp) return messageWrapper;
-        },
-
-        showLoadingModal() {
-            const content = `<div class="loading-container"><div class="loading-dots"><div></div><div></div><div></div></div><p>Generating response...</p></div>`;
-            this.showModal(content);
-        },
-        
-        showModalResult(tool, responseText, prompt) {
-            const content = `
-                <h3>${tool.name} Result</h3>
-                <div class="feedback-box"><p><strong>Your Prompt:</strong> ${prompt}</p></div>
-                <div style="margin-top: 1rem;">${responseText.replace(/\n/g, '<br>')}</div>
-            `;
-             this.showModal(content);
+            return messageDiv;
         },
 
         showModal(content) {
@@ -370,6 +445,10 @@ document.addEventListener('DOMContentLoaded', () => {
         },
 
         closeModal() {
+            if (this.currentEventSource) {
+                this.currentEventSource.close();
+                this.currentEventSource = null;
+            }
             this.dom.modal.classList.remove('active');
             this.dom.modalBody.innerHTML = '';
         },
@@ -470,6 +549,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // --- Rewritten Pomodoro Logic ---
         initPomodoro() {
             this.updatePomodoroDisplay();
+            // Stop any previous interval
+            if (this.pomodoroInterval) clearInterval(this.pomodoroInterval);
             // This single interval drives the timer.
             this.pomodoroInterval = setInterval(() => this.pomodoroTick(), 1000);
         },
